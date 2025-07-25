@@ -101,3 +101,4 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+keep_alive()  # Flask সার্ভার চালু হবে
