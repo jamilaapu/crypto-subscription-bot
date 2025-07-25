@@ -3,6 +3,7 @@ from telebot.types import ChatPermissions
 import json
 import time
 from datetime import datetime, timedelta
+from keep_alive import keep_alive
 
 BOT_TOKEN = "8068835959:AAGM2cjx58bOMXBCNlp9N6jqCdI8F-bIRBo"  # তোমার বট টোকেন
 GROUP_ID = -1001414774829     # তোমার গ্রুপ আইডি
