@@ -92,13 +92,26 @@ def handle_messages(message):
 # ---- বট রান ----
 def run_bot():
     while True:
-        check_subscriptions()
         try:
-            bot.polling(none_stop=True)
+            bot.polling(none_stop=True, timeout=30)
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(5)
 
+# সাবস্ক্রিপশন চেকার থ্রেড
+def schedule_checker():
+    while True:
+        check_subscriptions()
+        time.sleep(60)  # প্রতি ১ মিনিটে সাবস্ক্রিপশন চেক করবে
+
 if __name__ == "__main__":
+    # সাবস্ক্রিপশন চেকার আলাদা থ্রেডে চালাও
+    threading.Thread(target=schedule_checker, daemon=True).start()
+
+    # Flask সার্ভার চালাও
+    keep_alive()
+
+    # বট চালাও
     run_bot()
+
 keep_alive()  # Flask সার্ভার চালু হবে
