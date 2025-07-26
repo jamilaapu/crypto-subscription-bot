@@ -1,2 +1,10 @@
+<<<<<<< HEAD
 pyTelegramBotAPI
 requests
+=======
+pyTelegramBotAPI==4.12.0
+web3==6.11.3
+requests
+Flask
+setuptools
+>>>>>>> a4d36114e0e0e58573a99dcdee0dbce47092fa68
