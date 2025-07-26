@@ -1,39 +1,37 @@
-import requests
-from decimal import Decimal
+import requests, json
+from config import QUICKNODE_URL, WALLET_ADDRESS, EXPECTED_AMOUNT, TXHASH_FILE
 
-# QuickNode Endpoint
-QUICKNODE_URL = "https://solitary-wider-brook.bsc.quiknode.pro/1e79b2e9d43a0b25dbf1c9dd06fe44ab05d121da/"
-USDT_CONTRACT = "0x55d398326f99059fF775485246999027b3197955"
+def is_valid_tx(txhash, package_name):
+    with open(TXHASH_FILE, 'r') as f:
+        used = json.load(f)
+    if txhash in used:
+        return False, "Already used"
 
-def verify_txhash(txhash, to_address, required_amount):
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "method": "eth_getTransactionByHash",
+        "params": [txhash],
+        "id": 1, "jsonrpc": "2.0"
+    }
+
     try:
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_getTransactionReceipt",
-            "params": [txhash]
-        }
-        r = requests.post(QUICKNODE_URL, json=payload)
-        data = r.json()
+        res = requests.post(QUICKNODE_URL, headers=headers, json=payload)
+        tx = res.json()['result']
+        if tx is None:
+            return False, "Invalid TX"
 
-        if "result" not in data or data["result"] is None:
-            return False
+        to_address = tx['to'].lower()
+        if to_address != WALLET_ADDRESS.lower():
+            return False, "Wrong receiver"
 
-        receipt = data["result"]
-        logs = receipt.get("logs", [])
+        amount = int(tx['value'], 16) / 1e18
+        if amount < EXPECTED_AMOUNT[package_name]:
+            return False, "Amount too low"
 
-        for log in logs:
-            if log["address"].lower() == USDT_CONTRACT.lower():
-                topics = log["topics"]
-                if len(topics) >= 3:
-                    to = "0x" + topics[2][-40:]
-                    if to.lower() == to_address.lower():
-                        # এখানে Amount চেক করব
-                        value_hex = log["data"]
-                        value = int(value_hex, 16) / (10 ** 18)
-                        if Decimal(value) >= Decimal(required_amount):
-                            return True
-        return False
-    except Exception as e:
-        print("Error verifying payment:", e)
-        return False
+        used[txhash] = True
+        with open(TXHASH_FILE, 'w') as f:
+            json.dump(used, f, indent=2)
+
+        return True, ""
+    except:
+        return False, "Error"

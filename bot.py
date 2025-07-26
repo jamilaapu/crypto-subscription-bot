@@ -1,226 +1,105 @@
-import telebot
-from telebot import types
-import json
-import time
-import requests
-from datetime import datetime, timedelta
+import telebot, json, time, threading
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
+from config import BOT_TOKEN, GROUP_ID, DATA_FILE
+from payment_checker import is_valid_tx
 
-# ============ CONFIG ============
-API_TOKEN = "8068835959:AAGM2cjx58bOMXBCNlp9N6jqCdI8F-bIRBo"
-GROUP_ID = -1001414774829  # তোমার গ্রুপ আইডি
-WALLET_ADDRESS = "0xC421E42508269556F0e19f2929378aA7499CD8Db"
-QUICKNODE_URL = "https://solitary-wider-brook.bsc.quiknode.pro/1e79b2e9d43a0b25dbf1c9dd06fe44ab05d121da/"  # তোমার QuickNode URL
-PRICE_MONTHLY = 2    # USDT
-PRICE_YEARLY = 15    # USDT
-DATA_FILE = "subscriptions.json"
-bot = telebot.TeleBot(API_TOKEN)
-# ================================
+bot = telebot.TeleBot(BOT_TOKEN)
 
-
-# ============ UTILITIES ============
 def load_data():
     try:
-        with open(DATA_FILE, "r") as f:
+        with open(DATA_FILE, 'r') as f:
             return json.load(f)
     except:
         return {}
 
-
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
+@bot.message_handler(commands=['start'])
+def handle_start(message):
+    bot.reply_to(message, "Welcome to the subscription bot!")
 
-def restrict_user(user_id):
-    """গ্রুপে ইউজারের permission OFF করে দেবে"""
-    try:
-        perms = telebot.types.ChatPermissions(can_send_messages=False)
-        bot.restrict_chat_member(GROUP_ID, user_id, permissions=perms)
-    except Exception as e:
-        print(f"[ERROR] Restrict failed: {e}")
-
-
-def unrestrict_user(user_id):
-    """গ্রুপে ইউজারের permission ON করে দেবে"""
-    try:
-        perms = telebot.types.ChatPermissions(can_send_messages=True,
-                                              can_send_media_messages=True,
-                                              can_send_other_messages=True)
-        bot.restrict_chat_member(GROUP_ID, user_id, permissions=perms)
-    except Exception as e:
-        print(f"[ERROR] Unrestrict failed: {e}")
-
-
-def verify_txhash(txhash, required_amount):
-    """
-    QuickNode ব্যবহার করে ট্রানজেকশন ভেরিফাই করবে।
-    """
-    try:
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "id": 1,
-            "jsonrpc": "2.0",
-            "method": "eth_getTransactionByHash",
-            "params": [txhash]
-        }
-        response = requests.post(QUICKNODE_URL, json=payload, headers=headers)
-        data = response.json()
-
-        if "result" in data and data["result"] is not None:
-            to_addr = data["result"]["to"]
-            if to_addr.lower() == WALLET_ADDRESS.lower():
-                return True  # এখানে চাইলে value চেক করতে পারো
-        return False
-    except Exception as e:
-        print(f"[ERROR] TX Verify: {e}")
-        return False
-
-
-def check_expired():
-    """প্রতি ঘণ্টায় subscription মেয়াদ চেক করে expire করলে permission অফ করবে।"""
-    data = load_data()
-    updated = False
+@bot.message_handler(func=lambda m: True)
+def restrict_if_not_subscribed(message):
+    user_id = str(message.from_user.id)
+    subs = load_data()
     now = int(time.time())
 
-    for uid, sub in data.items():
-        if sub["expiry"] < now:
-            restrict_user(int(uid))
-            data[uid]["active"] = False
-            updated = True
+    if str(message.chat.id) != str(GROUP_ID):
+        return
 
-    if updated:
-        save_data(data)
+    if user_id not in subs or subs[user_id]["expiry"] < now:
+        try:
+            bot.restrict_chat_member(
+                GROUP_ID, message.from_user.id,
+                permissions=ChatPermissions(can_send_messages=False)
+            )
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔓 Unlock Access", url="https://t.me/CryptoBDBank_bot"))
+            bot.reply_to(message, "🚫 You need to activate a package to chat.", reply_markup=markup)
+        except Exception as e:
+            print(f"Restrict failed: {e}")
 
+@bot.callback_query_handler(func=lambda c: True)
+def handle_callback(c):
+    pass  # future use
 
-def show_banner_if_needed(user_id):
-    """যাদের প্যাকেজ নাই তাদের Banner পাঠাবে।"""
-    data = load_data()
-    if str(user_id) not in data or not data[str(user_id)]["active"]:
-        markup = types.InlineKeyboardMarkup()
-        btn = types.InlineKeyboardButton("🔑 Activate Now", url="https://t.me/CryptoBDBank_bot")
-        markup.add(btn)
-        bot.send_message(GROUP_ID, "🔒 **Access Locked!**\nপ্যাকেজ কিনে চ্যাট করার অনুমতি পান।", reply_markup=markup, parse_mode="Markdown")
-# ==================================
+@bot.message_handler(commands=['activate'])
+def handle_activate(message):
+    try:
+        _, txhash, package = message.text.split()
+    except:
+        bot.reply_to(message, "❌ Format: /activate TXHASH package_name")
+        return
 
+    ok, reason = is_valid_tx(txhash, package)
+    if not ok:
+        bot.reply_to(message, f"❌ Invalid TX: {reason}")
+        return
 
-# ============ COMMAND HANDLERS ============
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = types.KeyboardButton("💳 Buy Subscription")
-    btn2 = types.KeyboardButton("📜 My Subscription")
-    btn3 = types.KeyboardButton("🆘 HelpLine")
-    markup.add(btn1, btn2, btn3)
-
-    bot.send_message(message.chat.id,
-                     "👋 Welcome! Choose an option below:",
-                     reply_markup=markup)
-
-
-@bot.message_handler(func=lambda m: m.text == "💳 Buy Subscription")
-def buy_subscription(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = types.KeyboardButton("👉 Monthly Fee 2$ USDT")
-    btn2 = types.KeyboardButton("👉 Yearly Fee 15$ USDT")
-    btn_back = types.KeyboardButton("🔙 Back")
-    markup.add(btn1, btn2, btn_back)
-    bot.send_message(message.chat.id, "Choose your package:", reply_markup=markup)
-
-
-@bot.message_handler(func=lambda m: "Monthly Fee" in m.text or "Yearly Fee" in m.text)
-def package_selected(message):
-    if "Monthly" in message.text:
-        price = PRICE_MONTHLY
-        package_type = "monthly"
-    else:
-        price = PRICE_YEARLY
-        package_type = "yearly"
-
-    bot.send_message(
-        message.chat.id,
-        f"Send **{price}$ USDT** (BSC chain) to:\n\n`{WALLET_ADDRESS}`\n\n"
-        "Then submit your TxHash ID:",
-        parse_mode="Markdown"
-    )
-
-    bot.register_next_step_handler(message, process_txhash, package_type)
-
-
-def process_txhash(message, package_type):
-    txhash = message.text.strip()
-    price = PRICE_MONTHLY if package_type == "monthly" else PRICE_YEARLY
-
-    bot.send_message(message.chat.id, "🔍 Verifying your transaction...")
-    if verify_txhash(txhash, price):
-        data = load_data()
-        user_id = str(message.from_user.id)
-        duration = 30 * 24 * 3600 if package_type == "monthly" else 365 * 24 * 3600
-
-        data[user_id] = {
-            "package": package_type,
-            "expiry": int(time.time()) + duration,
-            "active": True,
-            "txhash": txhash
-        }
-        save_data(data)
-
-        unrestrict_user(message.from_user.id)
-        bot.send_message(message.chat.id, "✅ Subscription Activated! You can now chat in the group.")
-    else:
-        bot.send_message(message.chat.id, "❌ Invalid TxHash or Payment not found.")
-
-
-@bot.message_handler(func=lambda m: m.text == "📜 My Subscription")
-def my_subscription(message):
-    data = load_data()
     user_id = str(message.from_user.id)
+    subs = load_data()
+    duration = 3 * 86400  # 3 days for example
+    now = int(time.time())
+    expiry = now + duration
 
-    if user_id in data and data[user_id]["active"]:
-        expiry_time = datetime.fromtimestamp(data[user_id]["expiry"]).strftime("%Y-%m-%d %H:%M")
-        bot.send_message(message.chat.id, f"📦 Package: {data[user_id]['package'].capitalize()}\n⏳ Expiry: {expiry_time}")
-    else:
-        bot.send_message(message.chat.id, "❌ You have no active subscription.")
+    subs[user_id] = {"package": package, "expiry": expiry}
+    save_data(subs)
 
+    bot.restrict_chat_member(
+        GROUP_ID, message.from_user.id,
+        permissions=ChatPermissions(can_send_messages=True)
+    )
+    bot.reply_to(message, "✅ Activated successfully!")
 
-@bot.message_handler(func=lambda m: m.text == "🆘 HelpLine")
-def helpline(message):
-    bot.send_message(message.chat.id, "For any help, contact: @Jebon111")
+def check_expired():
+    subs = load_data()
+    now = int(time.time())
+    changed = False
 
-
-@bot.message_handler(func=lambda m: m.text == "🔙 Back")
-def back_to_main(message):
-    send_welcome(message)
-# =========================================
-
-
-# ============ RESTRICT NON-SUBSCRIBERS ============
-@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'sticker'])
-def block_non_subscribers(message):
-    if message.chat.id == GROUP_ID and not message.from_user.is_bot:
-        data = load_data()
-        uid = str(message.from_user.id)
-
-        if uid not in data or not data[uid]["active"]:
+    for user_id in list(subs):
+        if subs[user_id]["expiry"] < now:
             try:
-                restrict_user(message.from_user.id)
-                show_banner_if_needed(message.from_user.id)
-                bot.delete_message(GROUP_ID, message.message_id)
-            except:
-                pass
-# ================================================
+                bot.restrict_chat_member(
+                    GROUP_ID, int(user_id),
+                    permissions=ChatPermissions(can_send_messages=False)
+                )
+                print(f"⛔ Expired: {user_id}")
+            except Exception as e:
+                print(f"Restrict error: {e}")
+            del subs[user_id]
+            changed = True
 
-
-# ============ BACKGROUND TASK ============
-import threading
+    if changed:
+        save_data(subs)
 
 def background_task():
     while True:
         check_expired()
-        time.sleep(3600)  # প্রতি ১ ঘণ্টা পর চেক করবে
+        time.sleep(3600)
 
 threading.Thread(target=background_task, daemon=True).start()
-# =========================================
 
-
-print("🤖 Bot is running...")
+print("✅ Bot is running...")
 bot.infinity_polling()
