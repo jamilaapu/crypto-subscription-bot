@@ -58,7 +58,7 @@ def cmd_buy(msg):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Monthly – 2 USDT", callback_data="buy_monthly"))
     kb.add(types.InlineKeyboardButton("Yearly – 15 USDT", callback_data="buy_yearly"))
-    bot.send_message(msg.chat.id, f"Send USDT to:\n`{OFFICIAL_WALLET}`\nThen send TX Hash",
+    bot.send_message(msg.chat.id, f"Send BSC Chain USDT to:\n`{OFFICIAL_WALLET}`\nThen send TX Hash",
                      reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("buy_"))
