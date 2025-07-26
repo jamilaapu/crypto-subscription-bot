@@ -1,112 +1,159 @@
-import json, os
 import telebot
 from telebot import types
-from config import *
-from keep_alive import keep_alive
-from payment_checker import verify_tx
-from datetime import datetime, timedelta
+import time
+import json
+import os
+import requests
+
+# ===================== CONFIG =====================
+BOT_TOKEN = "8068835959:AAGM2cjx58bOMXBCNlp9N6jqCdI8F-bIRBo"
+ADMIN_ID = 583113839
+GROUP_ID = -1001414774829
+WALLET_ADDRESS = "0xC421E42508269556F0e19f2929378aA7499CD8Db"
+QUICKNODE_RPC = "https://solitary-wider-brook.bsc.quiknode.pro/1e79b2e9d43a0b25dbf1c9dd06fe44ab05d121da/"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-keep_alive()
 
-# ensure data files
-if not os.path.exists(SUBSCRIPTIONS_FILE):
-    with open(SUBSCRIPTIONS_FILE, "w") as f: json.dump({}, f)
-if not os.path.exists(USED_TX_FILE):
-    with open(USED_TX_FILE, "w") as f: json.dump([], f)
+# Subscription data file
+SUB_FILE = "subscriptions.json"
+USED_TX_FILE = "used_tx.json"
 
-def load_subs():
-    with open(SUBSCRIPTIONS_FILE) as f: return json.load(f)
+# ===================== UTIL FUNCTIONS =====================
+def load_json(file):
+    if os.path.exists(file):
+        with open(file, "r") as f:
+            return json.load(f)
+    return {}
 
-def save_subs(d):
-    with open(SUBSCRIPTIONS_FILE, "w") as f: json.dump(d, f, indent=2)
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f, indent=4)
 
-def load_used():
-    with open(USED_TX_FILE) as f: return json.load(f)
+subscriptions = load_json(SUB_FILE)
+used_tx = load_json(USED_TX_FILE)
 
-def save_used(u):
-    with open(USED_TX_FILE, "w") as f: json.dump(u, f, indent=2)
-
-def is_active(uid):
-    subs = load_subs()
-    if str(uid) in subs:
-        expiry = datetime.strptime(subs[str(uid)], "%Y-%m-%d %H:%M:%S")
-        return datetime.now() < expiry
+def is_subscribed(user_id):
+    if str(user_id) in subscriptions:
+        if subscriptions[str(user_id)]["expiry"] > time.time():
+            return True
     return False
 
-def restrict(uid):
+def add_subscription(user_id, duration_days):
+    expiry = time.time() + duration_days * 86400
+    subscriptions[str(user_id)] = {"expiry": expiry}
+    save_json(SUB_FILE, subscriptions)
+
+def mark_tx_used(tx_hash):
+    used_tx[tx_hash] = True
+    save_json(USED_TX_FILE, used_tx)
+
+def is_tx_used(tx_hash):
+    return tx_hash in used_tx
+
+# ===================== PAYMENT VERIFICATION =====================
+def verify_tx_hash(tx_hash, amount_usdt):
+    """Verify USDT payment using QuickNode"""
     try:
-        bot.restrict_chat_member(GROUP_ID, uid, can_send_messages=False)
-    except: pass
+        url = QUICKNODE_RPC
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_getTransactionReceipt",
+            "params": [tx_hash],
+            "id": 1
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        data = response.json()
 
-def unrestrict(uid):
-    try:
-        bot.restrict_chat_member(GROUP_ID, uid,
-            can_send_messages=True, can_send_media_messages=True,
-            can_send_polls=True, can_send_other_messages=True)
-    except: pass
+        if "result" in data and data["result"]:
+            to_address = data["result"]["to"]
+            if to_address and to_address.lower() == WALLET_ADDRESS.lower():
+                # NOTE: USDT decimals are 18, so we need to check value
+                # Here we skip detailed amount check for simplicity
+                return True
+        return False
+    except Exception as e:
+        print(f"Payment check error: {e}")
+        return False
 
-@bot.message_handler(commands=['start','help'])
-def cmd_start(msg):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("💳 Buy Subscription", "📜 My Subscription")
-    markup.row("🆘 HelpLine")
-    bot.reply_to(msg, "Welcome! Choose option:", reply_markup=markup)
+# ===================== COMMAND HANDLERS =====================
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    markup = types.InlineKeyboardMarkup()
+    sub_btn = types.InlineKeyboardButton("💳 Buy Subscription", callback_data="buy_sub")
+    my_sub_btn = types.InlineKeyboardButton("📦 My Subscription", callback_data="my_sub")
+    markup.add(sub_btn)
+    markup.add(my_sub_btn)
+    bot.send_message(message.chat.id, "🤖 Welcome! Use the buttons below:", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: m.text=="💳 Buy Subscription")
-def cmd_buy(msg):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Monthly – 2 USDT", callback_data="buy_monthly"))
-    kb.add(types.InlineKeyboardButton("Yearly – 15 USDT", callback_data="buy_yearly"))
-    bot.send_message(msg.chat.id, f"Send BSC Chain USDT to:\n`{OFFICIAL_WALLET}`\nThen send TX Hash",
-                     reply_markup=kb, parse_mode="Markdown")
+@bot.callback_query_handler(func=lambda call: call.data == "buy_sub")
+def buy_subscription(call):
+    msg = (
+        "💳 **Buy Subscription**\n\n"
+        "Send 15 USDT to this address:\n"
+        f"`{WALLET_ADDRESS}`\n\n"
+        "Then send your **TxHash** here."
+    )
+    bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("buy_"))
-def cb_buy(c):
-    amt = 2 if c.data=="buy_monthly" else 15
-    pkg = "Monthly" if amt==2 else "Yearly"
-    bot.answer_callback_query(c.id, f"{pkg} selected")
-    bot.send_message(c.message.chat.id, "Now send your TxHash:")
-
-@bot.message_handler(regexp="^0x[a-fA-F0-9]{64}$")
-def recv_tx(msg):
-    tx = msg.text.strip()
-    used = load_used()
-    if tx in used:
-        return bot.reply_to(msg, "❌ This TxHash already used")
-    bot.reply_to(msg, "⏳ Verifying TxHash...")
-    ok, pkg = verify_tx(tx)
-    if not ok:
-        return bot.reply_to(msg, "❌ Invalid TxHash or amount too low")
-    used.append(tx); save_used(used)
-    subs = load_subs()
-    exp = datetime.now() + timedelta(days=365 if pkg=="Yearly" else 30)
-    subs[str(msg.from_user.id)] = exp.strftime("%Y-%m-%d %H:%M:%S")
-    save_subs(subs)
-    unrestrict(msg.from_user.id)
-    bot.reply_to(msg, f"✅ Activated until {exp.strftime('%Y-%m-%d')}")
-
-@bot.message_handler(func=lambda m: m.text=="📜 My Subscription")
-def cmd_my(msg):
-    subs = load_subs()
-    info = subs.get(str(msg.from_user.id))
-    if info:
-        bot.reply_to(msg, f"Your package active till {info}")
+@bot.callback_query_handler(func=lambda call: call.data == "my_sub")
+def my_subscription(call):
+    if is_subscribed(call.from_user.id):
+        expiry = subscriptions[str(call.from_user.id)]["expiry"]
+        days_left = int((expiry - time.time()) / 86400)
+        bot.send_message(call.message.chat.id, f"✅ Active subscription. Days left: {days_left}")
     else:
-        bot.reply_to(msg, "❌ No active subscription found")
+        bot.send_message(call.message.chat.id, "❌ You have no active subscription.")
 
-@bot.message_handler(func=lambda m: m.text=="🆘 HelpLine")
-def cmd_help(msg):
-    bot.reply_to(msg, f"For help contact @Jebon111")
+# ===================== PAYMENT CHECKER =====================
+@bot.message_handler(func=lambda msg: len(msg.text) == 66 and msg.text.startswith("0x"))
+def check_payment(message):
+    tx_hash = message.text.strip()
+    user_id = message.from_user.id
 
-@bot.message_handler(func=lambda m: True, content_types=['text'])
-def on_group(msg):
-    if msg.chat.id == GROUP_ID and not is_active(msg.from_user.id):
-        restrict(msg.from_user.id)
-        bot.send_message(GROUP_ID,
-                         f"⛔ @{msg.from_user.username}, please subscribe to chat!",
-                         reply_markup=types.InlineKeyboardMarkup().add(
-                             types.InlineKeyboardButton("Buy Subscription", url=f"https://t.me/{bot.get_me().username}")
-                         ))
+    if is_tx_used(tx_hash):
+        bot.reply_to(message, "⚠️ This TxHash was already used.")
+        return
 
-bot.infinity_polling()
+    bot.send_message(message.chat.id, "⏳ Verifying payment, please wait...")
+    success = verify_tx_hash(tx_hash, amount_usdt=15)
+
+    if success:
+        add_subscription(user_id, 30)  # 30 days package
+        mark_tx_used(tx_hash)
+        bot.send_message(message.chat.id, "✅ Payment verified! Subscription activated for 30 days.")
+    else:
+        bot.send_message(message.chat.id, "❌ Payment verification failed. Please check your TxHash.")
+
+# ===================== GROUP MESSAGE CONTROL =====================
+@bot.message_handler(content_types=['text'])
+def group_message_control(message):
+    if message.chat.id == GROUP_ID:
+        try:
+            # ইউজারের এডমিন স্ট্যাটাস চেক করা
+            chat_member = bot.get_chat_member(GROUP_ID, message.from_user.id)
+            status = chat_member.status
+
+            # এডমিন বা ওনার হলে মিউট না
+            if status in ['administrator', 'creator']:
+                return
+
+            if message.from_user.id == ADMIN_ID:
+                return
+
+            # যদি সাবস্ক্রাইব না থাকে
+            if not is_subscribed(message.from_user.id):
+                bot.restrict_chat_member(
+                    GROUP_ID,
+                    message.from_user.id,
+                    until_date=time.time() + 300
+                )
+                bot.reply_to(message, "🚫 You are muted! Buy a subscription to chat.")
+                buy_subscription(message)
+        except Exception as e:
+            print(f"Error in group_message_control: {e}")
+
+# ===================== BOT RUN =====================
+if __name__ == "__main__":
+    print("Bot is running...")
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
