@@ -1,17 +1,39 @@
-from web3 import Web3
+import requests
+from decimal import Decimal
 
-BSC_RPC = "https://solitary-wider-brook.bsc.quiknode.pro/1e79b2e9d43a0b25dbf1c9dd06fe44ab05d121da/"
-TARGET_WALLET = "0xC421E42508269556F0e19f2929378aA7499CD8Db"
+# QuickNode Endpoint
+QUICKNODE_URL = "https://solitary-wider-brook.bsc.quiknode.pro/1e79b2e9d43a0b25dbf1c9dd06fe44ab05d121da/"
+USDT_CONTRACT = "0x55d398326f99059fF775485246999027b3197955"
 
-web3 = Web3(Web3.HTTPProvider(BSC_RPC))
-
-def verify_txhash(txhash, required_amount):
+def verify_txhash(txhash, to_address, required_amount):
     try:
-        tx = web3.eth.get_transaction(txhash)
-        if tx and tx['to'] and tx['to'].lower() == TARGET_WALLET.lower():
-            value_usdt = Web3.from_wei(tx['value'], 'ether')
-            return float(value_usdt) >= required_amount
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_getTransactionReceipt",
+            "params": [txhash]
+        }
+        r = requests.post(QUICKNODE_URL, json=payload)
+        data = r.json()
+
+        if "result" not in data or data["result"] is None:
+            return False
+
+        receipt = data["result"]
+        logs = receipt.get("logs", [])
+
+        for log in logs:
+            if log["address"].lower() == USDT_CONTRACT.lower():
+                topics = log["topics"]
+                if len(topics) >= 3:
+                    to = "0x" + topics[2][-40:]
+                    if to.lower() == to_address.lower():
+                        # এখানে Amount চেক করব
+                        value_hex = log["data"]
+                        value = int(value_hex, 16) / (10 ** 18)
+                        if Decimal(value) >= Decimal(required_amount):
+                            return True
         return False
     except Exception as e:
-        print(f"Error verifying txhash: {e}")
+        print("Error verifying payment:", e)
         return False
