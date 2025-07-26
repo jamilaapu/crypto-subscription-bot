@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 import telebot, json, time, threading
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 from config import BOT_TOKEN, GROUP_ID, DATA_FILE
@@ -9,7 +9,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 def load_data():
     try:
         with open(DATA_FILE, 'r') as f:
-=======
+
 import telebot
 from telebot import types
 import json
@@ -25,12 +25,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 def load_users():
     try:
         with open(USERS_DB_FILE, "r") as f:
->>>>>>> a4d36114e0e0e58573a99dcdee0dbce47092fa68
+ a4d36114e0e0e58573a99dcdee0dbce47092fa68
             return json.load(f)
     except:
         return {}
 
-<<<<<<< HEAD
+
 def save_data(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
@@ -121,7 +121,7 @@ def background_task():
 threading.Thread(target=background_task, daemon=True).start()
 
 print("✅ Bot is running...")
-=======
+
 def save_users(users):
     with open(USERS_DB_FILE, "w") as f:
         json.dump(users, f, indent=4)
@@ -291,6 +291,5 @@ Thread(target=run).start()
 
 # ---------------------------
 # Run Bot
-# ---------------------------
->>>>>>> a4d36114e0e0e58573a99dcdee0dbce47092fa68
+# --------------------------- a4d36114e0e0e58573a99dcdee0dbce47092fa68
 bot.infinity_polling()
