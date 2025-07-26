@@ -14,7 +14,7 @@ QUICKNODE_RPC = "https://solitary-wider-brook.bsc.quiknode.pro/1e79b2e9d43a0b25d
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Subscription data file
+# Subscription data files
 SUB_FILE = "subscriptions.json"
 USED_TX_FILE = "used_tx.json"
 
@@ -68,9 +68,7 @@ def verify_tx_hash(tx_hash, amount_usdt):
         if "result" in data and data["result"]:
             to_address = data["result"]["to"]
             if to_address and to_address.lower() == WALLET_ADDRESS.lower():
-                # NOTE: USDT decimals are 18, so we need to check value
-                # Here we skip detailed amount check for simplicity
-                return True
+                return True  # Amount check skipped for simplicity
         return False
     except Exception as e:
         print(f"Payment check error: {e}")
@@ -80,21 +78,40 @@ def verify_tx_hash(tx_hash, amount_usdt):
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     markup = types.InlineKeyboardMarkup()
-    sub_btn = types.InlineKeyboardButton("💳 Buy Subscription", callback_data="buy_sub")
+    sub_month = types.InlineKeyboardButton("💳 Buy 1-Month ($2)", callback_data="buy_month")
+    sub_year = types.InlineKeyboardButton("💳 Buy 1-Year ($15)", callback_data="buy_year")
     my_sub_btn = types.InlineKeyboardButton("📦 My Subscription", callback_data="my_sub")
-    markup.add(sub_btn)
+    markup.add(sub_month)
+    markup.add(sub_year)
     markup.add(my_sub_btn)
-    bot.send_message(message.chat.id, "🤖 Welcome! Use the buttons below:", reply_markup=markup)
+    bot.send_message(
+        message.chat.id,
+        "🤖 Welcome! Choose a subscription package below.\n\n"
+        "⚠ **Note:** Only **BSC Chain USDT** is supported.",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
 
-@bot.callback_query_handler(func=lambda call: call.data == "buy_sub")
+@bot.callback_query_handler(func=lambda call: call.data in ["buy_month", "buy_year"])
 def buy_subscription(call):
+    if call.data == "buy_month":
+        amount = 2
+        days = 30
+    else:
+        amount = 15
+        days = 365
+
     msg = (
-        "💳 **Buy Subscription**\n\n"
-        "Send 15 USDT to this address:\n"
+        f"💳 **Buy Subscription**\n\n"
+        f"Send **{amount} USDT** (BSC Chain Only) to this address:\n"
         f"`{WALLET_ADDRESS}`\n\n"
         "Then send your **TxHash** here."
     )
     bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
+
+    # Save pending subscription package info
+    subscriptions[str(call.from_user.id)] = {"pending_days": days}
+    save_json(SUB_FILE, subscriptions)
 
 @bot.callback_query_handler(func=lambda call: call.data == "my_sub")
 def my_subscription(call):
@@ -111,17 +128,23 @@ def check_payment(message):
     tx_hash = message.text.strip()
     user_id = message.from_user.id
 
+    # Is any package pending?
+    if str(user_id) not in subscriptions or "pending_days" not in subscriptions[str(user_id)]:
+        bot.reply_to(message, "⚠️ You didn't select any package. Use /start first.")
+        return
+
     if is_tx_used(tx_hash):
         bot.reply_to(message, "⚠️ This TxHash was already used.")
         return
 
     bot.send_message(message.chat.id, "⏳ Verifying payment, please wait...")
-    success = verify_tx_hash(tx_hash, amount_usdt=15)
+    amount = 2 if subscriptions[str(user_id)]["pending_days"] == 30 else 15
+    success = verify_tx_hash(tx_hash, amount_usdt=amount)
 
     if success:
-        add_subscription(user_id, 30)  # 30 days package
+        add_subscription(user_id, subscriptions[str(user_id)]["pending_days"])
         mark_tx_used(tx_hash)
-        bot.send_message(message.chat.id, "✅ Payment verified! Subscription activated for 30 days.")
+        bot.send_message(message.chat.id, "✅ Payment verified! Subscription activated.")
     else:
         bot.send_message(message.chat.id, "❌ Payment verification failed. Please check your TxHash.")
 
@@ -130,26 +153,22 @@ def check_payment(message):
 def group_message_control(message):
     if message.chat.id == GROUP_ID:
         try:
-            # ইউজারের এডমিন স্ট্যাটাস চেক করা
             chat_member = bot.get_chat_member(GROUP_ID, message.from_user.id)
             status = chat_member.status
 
-            # এডমিন বা ওনার হলে মিউট না
-            if status in ['administrator', 'creator']:
+            if status in ['administrator', 'creator'] or message.from_user.id == ADMIN_ID:
                 return
 
-            if message.from_user.id == ADMIN_ID:
-                return
-
-            # যদি সাবস্ক্রাইব না থাকে
             if not is_subscribed(message.from_user.id):
                 bot.restrict_chat_member(
                     GROUP_ID,
                     message.from_user.id,
                     until_date=time.time() + 300
                 )
-                bot.reply_to(message, "🚫 You are muted! Buy a subscription to chat.")
-                buy_subscription(message)
+                bot.reply_to(
+                    message,
+                    "🚫 You are muted! Buy a subscription to chat."
+                )
         except Exception as e:
             print(f"Error in group_message_control: {e}")
 
